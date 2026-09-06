@@ -188,16 +188,48 @@ EXTRACTOR_JS = """
         }
     }
 
-    // 4. Extract Published Date / Author (Optional context)
+    // 4. Extract Published Date / Author
     let publishedDate = '';
-    const dateMeta = document.querySelector('meta[property="article:published_time"], meta[name="pubdate"], meta[name="publish-date"]');
+    const dateMeta = document.querySelector('meta[property="article:published_time"], meta[name="pubdate"], meta[name="publish-date"], meta[name="date"], meta[property="og:updated_time"]');
     if (dateMeta && dateMeta.content) {
-        publishedDate = dateMeta.content;
-    } else {
-        const timeEl = document.querySelector('article time, time, .publish-date, .post-date');
-        if (timeEl && (timeEl.getAttribute('datetime') || timeEl.innerText)) {
-            publishedDate = timeEl.getAttribute('datetime') || timeEl.innerText.trim();
+        publishedDate = dateMeta.content.trim();
+    }
+    
+    if (!publishedDate) {
+        const dateSelectors = [
+            'article time', 'time',
+            '.publish-date', '.post-date', '.news-date', '.pub', '.report-date',
+            '.date', '.published-date', '.entry-date', '[class*="publish" i]', '[class*="post-time" i]'
+        ];
+        for (const sel of dateSelectors) {
+            const el = document.querySelector(sel);
+            if (el) {
+                const dt = el.getAttribute('datetime') || el.innerText || '';
+                if (dt.trim() && dt.trim().length > 5 && dt.trim().length < 80 && !/^(প্রিন্ট|print)$/i.test(dt.trim())) {
+                    publishedDate = dt.trim();
+                    break;
+                }
+            }
         }
+    }
+
+    if (!publishedDate) {
+        // Look for elements with publish keywords or ISO timestamps in text
+        const dateNodes = Array.from(document.querySelectorAll('h5, h6, span, div, p, em, small')).filter(el => {
+            const txt = (el.innerText || '').trim();
+            return txt.length > 5 && txt.length < 80 && (
+                /^\d{4}-\d{2}-\d{2}/.test(txt) ||
+                /^(Publish|প্রকাশ|আপলোড সময়|আপডেট সময়)\s*:/i.test(txt)
+            );
+        });
+        if (dateNodes.length > 0) {
+            publishedDate = dateNodes[0].innerText.trim();
+        }
+    }
+
+    if (publishedDate) {
+        // Clean up common prefixes and whitespace
+        publishedDate = publishedDate.replace(/^(Publish|প্রকাশ|আপলোড সময়|আপডেট সময়)\s*:\s*/i, '').trim();
     }
 
     // 5. Look for Print View URL or button ("প্রিন্ট", "print", "মুদ্রণ", etc.)
@@ -427,6 +459,7 @@ def build_reader_html(data: dict, source_url: str) -> str:
     logo_markup = f'<img src="{html.escape(logo_url)}" alt="{site_name} Logo" class="site-logo" />' if logo_url else ""
     hero_image_markup = f'<div class="hero-image-container"><img src="{html.escape(main_image)}" alt="Main Image" class="hero-image" /></div>' if main_image else ""
     date_markup = f'<span class="meta-item published-date">📅 <strong>Date:</strong> {published_date}</span>' if published_date else ""
+    header_date_markup = f'<span class="site-date">📅 {published_date}</span>' if published_date else ""
 
     return f"""<!DOCTYPE html>
 <html lang="bn, en">
@@ -460,7 +493,7 @@ def build_reader_html(data: dict, source_url: str) -> str:
             margin: 0 auto;
         }}
 
-        /* Header Bar: Site Logo + Domain + Source URL */
+        /* Header Bar: Site Logo + Domain + Published Date + Source URL */
         .site-header {{
             display: flex;
             align-items: center;
@@ -476,6 +509,14 @@ def build_reader_html(data: dict, source_url: str) -> str:
             align-items: center;
             gap: 12px;
             flex-shrink: 0;
+            max-width: 45%;
+        }}
+
+        .brand-details {{
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            min-width: 0;
         }}
 
         .site-logo {{
@@ -491,6 +532,14 @@ def build_reader_html(data: dict, source_url: str) -> str:
             font-weight: 700;
             color: #1a202c;
             letter-spacing: -0.2px;
+            line-height: 1.2;
+        }}
+
+        .site-date {{
+            font-size: 8.5pt;
+            color: #718096;
+            font-weight: 500;
+            line-height: 1.3;
         }}
 
         .source-pill {{
@@ -647,11 +696,14 @@ def build_reader_html(data: dict, source_url: str) -> str:
 </head>
 <body>
     <div class="reader-container">
-        <!-- 1. Header with Site Logo & Site Name & Top Source -->
+        <!-- 1. Header with Site Logo, Site Name, Published Date & Top Source -->
         <header class="site-header">
             <div class="site-brand">
                 {logo_markup}
-                <span class="site-name">{site_name}</span>
+                <div class="brand-details">
+                    <span class="site-name">{site_name}</span>
+                    {header_date_markup}
+                </div>
             </div>
             <div class="source-pill">
                 <strong>Source:</strong> <a href="{escaped_source_url}">{escaped_source_url}</a>
