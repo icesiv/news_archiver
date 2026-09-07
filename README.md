@@ -23,12 +23,12 @@ A high-performance Python utility that reads URLs from `data.csv`, navigates to 
 
 ## Usage
 
-1. Add your URLs to `data.csv`:
+1. Add your URLs and optional dates to `data.csv`:
    ```csv
-   url
-   https://www.channelionline.com/private-sector-energy-imports-a-blessing-for-the-economy-or-a-new-challenge/
-   https://timestodaybd.com/details/37ed816b21f5
-   https://www.khoborsangjog.com/119993
+   date,url
+   08.06.26,https://www.dainiksangbadpratidin.com/news/150433
+   08.06.26,https://banglascoop.com/34518
+   09.06.26,https://www.71sangbad.com/news/155068
    ```
 
 2. Run the archiver (default 5 concurrent workers):
@@ -45,12 +45,14 @@ A high-performance Python utility that reads URLs from `data.csv`, navigates to 
    .venv/bin/python archiver.py --limit 5
    ```
 
-4. The generated PDFs will be saved in the `./output` folder:
+4. The generated PDFs will be saved into their respective date subfolders under `./output`:
    ```
    output/
-   ├── channelionline.com_private-sector-energy-imports...pdf
-   ├── timestodaybd.com_...pdf
-   └── khoborsangjog.com_...pdf
+   ├── 08.06.26/
+   │   ├── www.dainiksangbadpratidin.com_...pdf
+   │   └── banglascoop.com_...pdf
+   └── 09.06.26/
+       └── www.71sangbad.com_...pdf
    ```
 
 ### Optional Arguments

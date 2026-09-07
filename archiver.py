@@ -61,15 +61,15 @@ def extract_base_url(url: str) -> str:
     return sanitize_filename(netloc, max_length=50)
 
 
-def read_urls_from_csv(csv_path: Path) -> list[str]:
+def read_entries_from_csv(csv_path: Path) -> list[dict]:
     """
-    Reads URLs from a CSV file.
+    Reads entries (URL and optional date) from a CSV file.
     Supports CSVs with headers or raw list of URLs.
+    Returns a list of dicts: [{'url': '...', 'date': '...'}, ...]
     """
     if not csv_path.exists():
         raise FileNotFoundError(f"CSV file not found: {csv_path}")
 
-    urls = []
     with open(csv_path, mode="r", encoding="utf-8-sig", errors="ignore") as f:
         reader = csv.reader(f)
         rows = [row for row in reader if row and any(cell.strip() for cell in row)]
@@ -80,17 +80,32 @@ def read_urls_from_csv(csv_path: Path) -> list[str]:
 
     # Check if first row is a header
     first_row = [cell.strip().lower() for cell in rows[0]]
-    url_col_idx = 0
-    known_headers = ["url", "urls", "link", "links", "news_url", "page_url", "article_url", "website", "source_url"]
-    found_header = False
+    url_col_idx = None
+    date_col_idx = None
+    known_url_headers = ["url", "urls", "link", "links", "news_url", "page_url", "article_url", "website", "source_url"]
+    known_date_headers = ["date", "dates", "published_date", "publish_date", "news_date", "post_date", "entry_date", "pub_date", "pubdate"]
 
     for idx, col in enumerate(first_row):
-        if col in known_headers:
+        if col in known_url_headers:
             url_col_idx = idx
-            found_header = True
-            break
+        elif col in known_date_headers:
+            date_col_idx = idx
+
+    found_header = (url_col_idx is not None or date_col_idx is not None)
+
+    if url_col_idx is None:
+        if len(first_row) > 1:
+            if "http" in first_row[1] or "." in first_row[1]:
+                url_col_idx = 1
+                date_col_idx = 0
+            else:
+                url_col_idx = 0
+                date_col_idx = 1
+        else:
+            url_col_idx = 0
 
     start_row = 1 if found_header else 0
+    entries = []
 
     for row in rows[start_row:]:
         if len(row) > url_col_idx:
@@ -99,9 +114,22 @@ def read_urls_from_csv(csv_path: Path) -> list[str]:
                 continue
             if not (raw_url.startswith("http://") or raw_url.startswith("https://")):
                 raw_url = "https://" + raw_url
-            urls.append(raw_url)
 
-    return urls
+            raw_date = ""
+            if date_col_idx is not None and len(row) > date_col_idx:
+                raw_date = row[date_col_idx].strip()
+
+            entries.append({"url": raw_url, "date": raw_date})
+
+    return entries
+
+
+def read_urls_from_csv(csv_path: Path) -> list[str]:
+    """
+    Reads URLs from a CSV file (backward-compatible).
+    """
+    entries = read_entries_from_csv(csv_path)
+    return [e["url"] for e in entries]
 
 
 # JavaScript snippet to extract only the 4 target components
@@ -269,7 +297,7 @@ EXTRACTOR_JS = """
     }
 
     // 6. Extract Clean Article Content
-    // Priority container selectors (including designated print containers like #toPrint)
+    // Priority container selectors (including designated print containers, Elementor, WordPress, and standard CMS containers)
     const contentSelectors = [
         '#toPrint',
         '#printArea',
@@ -278,6 +306,9 @@ EXTRACTOR_JS = """
         '.print-area',
         '.print-content',
         '.printable',
+        '.elementor-widget-theme-post-content',
+        '.elementor-post__content',
+        '.wp-block-post-content',
         '.single-details',
         '.entry-content',
         '.article-body',
@@ -299,24 +330,34 @@ EXTRACTOR_JS = """
         'main'
     ];
 
-    let contentEl = null;
+    const candidates = [];
     for (const sel of contentSelectors) {
         const elements = document.querySelectorAll(sel);
         for (const el of elements) {
+            // Ignore containers inside headers, footers, navigation, tickers, marquees, or sidebars
+            if (el.closest('header, footer, nav, aside, [class*="header" i], [class*="ticker" i], [class*="marquee" i], [class*="menu" i]')) {
+                continue;
+            }
             const text = el.innerText ? el.innerText.trim() : '';
             if (text.length > 80) {
-                contentEl = el;
-                break;
+                candidates.push({
+                    element: el,
+                    textLen: text.length,
+                    pCount: el.querySelectorAll('p').length
+                });
             }
         }
-        if (contentEl) break;
     }
 
-    // Fallback container: largest text content block excluding headers/footers/nav
+    // Pick candidate with largest text content length
+    candidates.sort((a, b) => b.textLen - a.textLen);
+    let contentEl = candidates.length > 0 ? candidates[0].element : null;
+
+    // Fallback container: largest text content block excluding headers/footers/nav/sidebars
     if (!contentEl) {
         let maxTextLen = 0;
         document.querySelectorAll('div, section, article, td').forEach(el => {
-            if (el.closest('header, footer, nav, aside')) return;
+            if (el.closest('header, footer, nav, aside, [class*="header" i], [class*="ticker" i], [class*="marquee" i], [class*="menu" i]')) return;
             const text = el.innerText ? el.innerText.trim() : '';
             if (text.length > maxTextLen) {
                 if (el !== document.body && el.tagName.toLowerCase() !== 'html') {
@@ -443,7 +484,7 @@ EXTRACTOR_JS = """
 """
 
 
-def build_reader_html(data: dict, source_url: str) -> str:
+def build_reader_html(data: dict, source_url: str, fallback_date: str = "") -> str:
     """
     Builds a clean, publication-grade HTML template containing:
     Logo, Site Name, Source URL, Title, Hero Image, Article Body, and Archival Citation.
@@ -452,7 +493,7 @@ def build_reader_html(data: dict, source_url: str) -> str:
     site_name = html.escape(data.get("siteName") or extract_base_url(source_url))
     logo_url = data.get("logoUrl") or ""
     main_image = data.get("mainImageUrl") or ""
-    published_date = html.escape(data.get("publishedDate") or "")
+    published_date = html.escape(data.get("publishedDate") or fallback_date or "")
     article_html = data.get("articleHtml") or ""
     escaped_source_url = html.escape(source_url)
 
@@ -744,6 +785,7 @@ async def process_single_url(
     index: int,
     total: int,
     output_dir: Path,
+    date: str = "",
     timeout_ms: int = 30000,
     semaphore: asyncio.Semaphore = None,
 ) -> dict:
@@ -757,6 +799,7 @@ async def process_single_url(
        - Builds clean reader-mode HTML and renders PDF directly.
     4. If NO article body text is found:
        - Captures and renders the full webpage to PDF directly.
+    5. Saves output PDF into date-based subfolder in output_dir if date is present.
     """
     async with semaphore:
         start_time = time.time()
@@ -818,20 +861,29 @@ async def process_single_url(
             title = re.sub(r'^(print\s*\|\s*|প্রিন্ট\s*\|\s*)', '', title, flags=re.IGNORECASE).strip()
             clean_title = sanitize_filename(title, max_length=120)
             filename = f"{base_url}_{clean_title}.pdf"
-            output_pdf_path = output_dir / filename
+
+            # Determine target output directory (create date subfolder if date provided)
+            if date:
+                clean_date = sanitize_filename(date, max_length=50)
+                target_dir = output_dir / clean_date
+            else:
+                target_dir = output_dir
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+            output_pdf_path = target_dir / filename
 
             # Handle duplicate filename collisions
             counter = 1
             while output_pdf_path.exists():
                 filename = f"{base_url}_{clean_title}_{counter}.pdf"
-                output_pdf_path = output_dir / filename
+                output_pdf_path = target_dir / filename
                 counter += 1
 
             has_body_text = data.get("hasBodyText", False) and bool(data.get("articleHtml", "").strip())
 
             if has_body_text:
-                # 4a. Generate Clean Reader HTML (always passing the original source URL for the header)
-                reader_html = build_reader_html(data, url)
+                # 4a. Generate Clean Reader HTML (always passing the original source URL and fallback date)
+                reader_html = build_reader_html(data, url, fallback_date=date)
 
                 # 5a. Load reader HTML in a fresh clean page to render PDF
                 render_page = await context.new_page()
@@ -878,7 +930,11 @@ async def process_single_url(
                 mode_label = "Full Webpage"
 
             elapsed = round(time.time() - start_time, 2)
-            logger.info(f"[{index}/{total}] ✅ Saved PDF ({elapsed}s) [{mode_label}]: {filename}")
+            try:
+                rel_path = output_pdf_path.relative_to(output_dir)
+            except ValueError:
+                rel_path = output_pdf_path.name
+            logger.info(f"[{index}/{total}] ✅ Saved PDF ({elapsed}s) [{mode_label}]: {rel_path}")
             await context.close()
             return {"url": url, "success": True, "detail": str(output_pdf_path), "filename": filename, "mode": mode_label}
 
@@ -908,20 +964,20 @@ async def run_archiver(args):
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        urls = read_urls_from_csv(csv_path)
+        entries = read_entries_from_csv(csv_path)
     except Exception as e:
         logger.error(f"Error reading CSV: {e}")
         sys.exit(1)
 
-    if not urls:
+    if not entries:
         logger.warning("No URLs found to process.")
         return
 
     if args.limit and args.limit > 0:
-        urls = urls[:args.limit]
-        logger.info(f"Processing limit applied: first {len(urls)} URL(s)")
+        entries = entries[:args.limit]
+        logger.info(f"Processing limit applied: first {len(entries)} item(s)")
 
-    logger.info(f"Queued {len(urls)} URL(s) for processing with {concurrency} parallel workers...\n")
+    logger.info(f"Queued {len(entries)} URL(s) for processing with {concurrency} parallel workers...\n")
 
     semaphore = asyncio.Semaphore(concurrency)
 
@@ -932,14 +988,15 @@ async def run_archiver(args):
         tasks = [
             process_single_url(
                 browser=browser,
-                url=url,
+                url=item["url"],
+                date=item.get("date", ""),
                 index=idx,
-                total=len(urls),
+                total=len(entries),
                 output_dir=output_dir,
                 timeout_ms=args.timeout,
                 semaphore=semaphore,
             )
-            for idx, url in enumerate(urls, 1)
+            for idx, item in enumerate(entries, 1)
         ]
 
         results = await asyncio.gather(*tasks)
