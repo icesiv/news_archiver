@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>News Archiver — Reader Mode PDF Generator</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand">
+        <svg class="brand-icon" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="8" y1="13" x2="16" y2="13" />
+          <line x1="8" y1="17" x2="13" y2="17" />
+        </svg>
+        <div>
+          <h1>News Archiver</h1>
+          <p class="subtitle">Clean Reader-Mode &amp; Print-Mode PDF Generator</p>
+        </div>
+      </div>
+      <div class="header-meta">
+        <span id="browser-pill" class="status-pill status-checking" role="status">Checking engine…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- One-time Browser Setup Banner (shown only if Chromium is missing) -->
+    <section id="setup-banner" class="card banner-warning" aria-labelledby="setup-heading" hidden>
+      <div class="banner-row">
+        <div>
+          <h2 id="setup-heading">One-Time Browser Setup Required</h2>
+          <p id="setup-message">
+            Playwright Chromium is not installed on this PC yet (~170 MB one-time download).
+            Install it once to start generating PDFs.
+          </p>
+        </div>
+        <button type="button" id="install-browser-btn" class="btn btn-primary">
+          Install Browser Engine
+        </button>
+      </div>
+    </section>
+
+    <!-- URL / CSV Input Card -->
+    <section class="card" aria-labelledby="input-heading">
+      <h2 id="input-heading">Archive Webpages to PDF</h2>
+
+      <form id="archive-form" method="POST" action="/api/archive" novalidate>
+        <div class="form-grid">
+          <div class="field field-full">
+            <label for="urls-input">Article or Webpage URLs (one per line)</label>
+            <textarea
+              id="urls-input"
+              name="urls"
+              rows="5"
+              placeholder="https://example.com/news/article-1&#10;https://example.com/news/article-2"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+              aria-describedby="urls-hint form-error"
+            ></textarea>
+            <p id="urls-hint" class="hint">
+              Paste one or more URLs, or optionally prefix with a date like <code>17.11.26,https://...</code>. Leave empty if uploading a CSV below.
+            </p>
+          </div>
+
+          <div class="field">
+            <label for="csv-input">Or upload a CSV file (optional)</label>
+            <input
+              type="file"
+              id="csv-input"
+              name="csv_file"
+              accept=".csv,text/csv"
+              aria-describedby="csv-hint"
+            >
+            <p id="csv-hint" class="hint">Supports CSVs with <code>url</code> and optional <code>date</code> columns.</p>
+          </div>
+
+          <div class="field">
+            <label for="date-input">Date Subfolder (optional)</label>
+            <input
+              type="text"
+              id="date-input"
+              name="date"
+              placeholder="e.g. 17.11.26"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+              aria-describedby="date-hint"
+            >
+            <p id="date-hint" class="hint">Groups generated PDFs under a date folder.</p>
+          </div>
+
+          <div class="field">
+            <label for="concurrency-input">Parallel Workers (1–10)</label>
+            <input
+              type="number"
+              id="concurrency-input"
+              name="concurrency"
+              min="1"
+              max="10"
+              value="5"
+            >
+          </div>
+
+          <div class="field">
+            <label for="timeout-input">Page Timeout (seconds)</label>
+            <input
+              type="number"
+              id="timeout-input"
+              name="timeout_sec"
+              min="5"
+              max="120"
+              value="30"
+            >
+          </div>
+        </div>
+
+        <p id="form-error" class="error-text" role="alert" hidden></p>
+
+        <div class="form-actions">
+          <button type="submit" id="generate-btn" class="btn btn-primary">
+            Generate PDFs
+          </button>
+          <button type="button" id="clear-input-btn" class="btn btn-secondary">
+            Clear Form
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Live Job Progress Card -->
+    <section id="progress-card" class="card" aria-labelledby="progress-heading" hidden>
+      <div class="section-header">
+        <h2 id="progress-heading">Current Job Progress</h2>
+        <span id="job-summary-badge" class="badge" role="status" aria-live="polite">Queued</span>
+      </div>
+
+      <div class="progress-wrap">
+        <label for="job-progress" id="job-progress-label" class="progress-label">0 of 0 processed</label>
+        <progress id="job-progress" class="progress-bar" value="0" max="100"></progress>
+      </div>
+
+      <p id="job-error-banner" class="error-text" role="alert" hidden></p>
+
+      <ul id="job-results-list" class="job-results-list" aria-live="polite"></ul>
+    </section>
+
+    <!-- Generated PDFs Library Card -->
+    <section class="card" aria-labelledby="pdfs-heading">
+      <div class="section-header">
+        <div>
+          <h2 id="pdfs-heading">Generated PDFs</h2>
+          <p id="storage-meta" class="hint">Loading files…</p>
+        </div>
+        <div class="toolbar">
+          <button type="button" id="refresh-pdfs-btn" class="btn btn-secondary">Refresh</button>
+          <button type="button" id="open-folder-btn" class="btn btn-secondary">Open Folder</button>
+          <button type="button" id="download-selected-btn" class="btn btn-secondary" hidden>
+            Download Selected (.zip)
+          </button>
+          <a id="download-all-link" class="btn btn-primary" href="/api/pdfs/download-bulk" download>
+            Download All (.zip)
+          </a>
+          <button type="button" id="delete-all-btn" class="btn btn-danger">
+            Delete All PDFs
+          </button>
+        </div>
+      </div>
+
+      <p id="library-status" class="status-banner" role="status" aria-live="polite" hidden></p>
+
+      <div id="empty-state" class="empty-state" hidden>
+        No generated PDFs yet. Paste URLs or upload a CSV above to get started.
+      </div>
+
+      <div id="pdfs-table-wrapper" tabindex="0" role="region" aria-labelledby="pdfs-heading" class="table-wrapper" hidden>
+        <table id="pdfs-table">
+          <thead>
+            <tr>
+              <th scope="col" class="col-check">
+                <input type="checkbox" id="select-all-checkbox" aria-label="Select all PDFs">
+              </th>
+              <th scope="col">PDF File</th>
+              <th scope="col">Folder</th>
+              <th scope="col">Size</th>
+              <th scope="col">Created</th>
+              <th scope="col" class="col-action">Download</th>
+            </tr>
+          </thead>
+          <tbody id="pdfs-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <p>Output folder: <code id="footer-output-path">output</code></p>
+  </footer>
+
+  <!-- Native Modal Confirmation Dialog for Destructive Delete -->
+  <dialog id="delete-confirm-dialog" aria-labelledby="delete-dialog-title">
+    <h2 id="delete-dialog-title">Delete all generated PDFs?</h2>
+    <p id="delete-dialog-desc" class="dialog-body">
+      This will permanently remove all <strong id="delete-count-label">0</strong> PDF files from the output folder. This action cannot be undone.
+    </p>
+    <form method="dialog" class="dialog-actions">
+      <button type="submit" value="cancel" class="btn btn-secondary" autofocus>Cancel</button>
+      <button type="submit" value="confirm" class="btn btn-danger">Delete All PDFs</button>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

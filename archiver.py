@@ -61,21 +61,13 @@ def extract_base_url(url: str) -> str:
     return sanitize_filename(netloc, max_length=50)
 
 
-def read_entries_from_csv(csv_path: Path) -> list[dict]:
+def parse_entries_from_rows(rows: list[list[str]]) -> list[dict]:
     """
-    Reads entries (URL and optional date) from a CSV file.
-    Supports CSVs with headers or raw list of URLs.
-    Returns a list of dicts: [{'url': '...', 'date': '...'}, ...]
+    Parses CSV rows (list of lists) into [{'url': '...', 'date': '...'}, ...].
+    Supports CSVs with or without headers.
     """
-    if not csv_path.exists():
-        raise FileNotFoundError(f"CSV file not found: {csv_path}")
-
-    with open(csv_path, mode="r", encoding="utf-8-sig", errors="ignore") as f:
-        reader = csv.reader(f)
-        rows = [row for row in reader if row and any(cell.strip() for cell in row)]
-
+    rows = [row for row in rows if row and any(cell.strip() for cell in row)]
     if not rows:
-        logger.warning(f"CSV file {csv_path} is empty.")
         return []
 
     # Check if first row is a header
@@ -121,6 +113,35 @@ def read_entries_from_csv(csv_path: Path) -> list[dict]:
 
             entries.append({"url": raw_url, "date": raw_date})
 
+    return entries
+
+
+def parse_entries_from_csv_text(csv_text: str) -> list[dict]:
+    """
+    Parses CSV content from a string into [{'url': '...', 'date': '...'}, ...].
+    """
+    if not csv_text:
+        return []
+    reader = csv.reader(csv_text.splitlines())
+    return parse_entries_from_rows(list(reader))
+
+
+def read_entries_from_csv(csv_path: Path) -> list[dict]:
+    """
+    Reads entries (URL and optional date) from a CSV file.
+    Supports CSVs with headers or raw list of URLs.
+    Returns a list of dicts: [{'url': '...', 'date': '...'}, ...]
+    """
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
+    with open(csv_path, mode="r", encoding="utf-8-sig", errors="ignore") as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+
+    entries = parse_entries_from_rows(rows)
+    if not entries:
+        logger.warning(f"CSV file {csv_path} is empty.")
     return entries
 
 
@@ -521,7 +542,7 @@ def build_reader_html(data: dict, source_url: str, fallback_date: str = "") -> s
         }}
 
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Bengali", "Kalpurush", "SolaimanLipi", Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans Bengali", "Kalpurush", "SolaimanLipi", "Nirmala UI", "Vrinda", Helvetica, Arial, sans-serif;
             color: #1a202c;
             background-color: #ffffff;
             line-height: 1.75;
@@ -826,7 +847,7 @@ async def process_single_url(
                 err_msg = f"Failed to load URL {url}: {e}"
                 logger.error(f"[{index}/{total}] ❌ {err_msg}")
                 await context.close()
-                return {"url": url, "success": False, "detail": err_msg, "filename": ""}
+                return {"url": url, "success": False, "detail": err_msg, "filename": "", "rel_path": ""}
 
             # 2. Extract target components from the main page
             data = await page.evaluate(EXTRACTOR_JS)
@@ -933,10 +954,11 @@ async def process_single_url(
             try:
                 rel_path = output_pdf_path.relative_to(output_dir)
             except ValueError:
-                rel_path = output_pdf_path.name
-            logger.info(f"[{index}/{total}] ✅ Saved PDF ({elapsed}s) [{mode_label}]: {rel_path}")
+                rel_path = Path(output_pdf_path.name)
+            rel_path_str = str(rel_path).replace("\\", "/")
+            logger.info(f"[{index}/{total}] ✅ Saved PDF ({elapsed}s) [{mode_label}]: {rel_path_str}")
             await context.close()
-            return {"url": url, "success": True, "detail": str(output_pdf_path), "filename": filename, "mode": mode_label}
+            return {"url": url, "success": True, "detail": str(output_pdf_path), "filename": filename, "rel_path": rel_path_str, "mode": mode_label, "elapsed": elapsed}
 
         except Exception as e:
             err_msg = f"Failed to generate PDF for {url}: {e}"
@@ -945,7 +967,7 @@ async def process_single_url(
                 await context.close()
             except Exception:
                 pass
-            return {"url": url, "success": False, "detail": err_msg, "filename": ""}
+            return {"url": url, "success": False, "detail": err_msg, "filename": "", "rel_path": ""}
 
 
 async def run_archiver(args):

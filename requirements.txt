@@ -1,4 +1,8 @@
+fastapi==0.128.8
 greenlet==3.2.5
 playwright==1.60.0
 pyee==13.0.1
+python-multipart==0.0.20
+pywebview==6.2.1
 typing_extensions==4.16.0
+uvicorn==0.39.0
